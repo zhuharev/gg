@@ -2,6 +2,8 @@
 package gg
 
 import (
+	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -9,6 +11,8 @@ import (
 	"math"
 
 	"github.com/golang/freetype/raster"
+	"github.com/nfnt/resize"
+	dry "github.com/ungerik/go-dry"
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -624,6 +628,28 @@ func (dc *Context) drawString(im *image.RGBA, s string, x, y float64) {
 			// TODO: is falling back on the U+FFFD glyph the responsibility of
 			// the Drawer or the Face?
 			// TODO: set prevC = '\ufffd'?
+			continue
+		}
+		if c > 10000 {
+			u := fmt.Sprintf("http://twemoji.maxcdn.com/36x36/%x.png", c)
+			data, err := dry.FileGetBytes(u)
+			if err != nil {
+				panic(fmt.Sprint(c, string(c), err))
+			}
+			pngIconImage, err := png.Decode(bytes.NewReader(data))
+			if err != nil {
+				panic(err)
+			}
+
+			pngIconImage = resize.Resize(uint(dc.fontHeight), 0, pngIconImage, resize.Bicubic)
+
+			dc.DrawImageAnchored(pngIconImage, dr.Min.X, dr.Min.Y, 0, 0)
+
+			//			dc.DrawImage(im, x, y)
+
+			//dc.DrawImage(pngIconImage, int(d.Dot.X), int(y))
+			d.Dot.X += advance + 721
+			prevC = c
 			continue
 		}
 		sr := dr.Sub(dr.Min)

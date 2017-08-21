@@ -27,13 +27,10 @@ func splitOnSpace(x string) []string {
 
 func wordWrap(m measureStringer, s string, width float64) []string {
 	var result []string
-	for _, line := range strings.Split(s, "\n") {
+	for li, line := range strings.Split(s, "\n") {
 		fields := splitOnSpace(line)
-		if len(fields)%2 == 1 {
-			fields = append(fields, "")
-		}
 		x := ""
-		for i := 0; i < len(fields); i += 2 {
+		for i := 0; i < len(fields); i++ {
 			w, _ := m.MeasureString(x + fields[i])
 			if w > width {
 				if x == "" {
@@ -45,10 +42,14 @@ func wordWrap(m measureStringer, s string, width float64) []string {
 					x = ""
 				}
 			}
-			x += fields[i] + fields[i+1]
+			x += fields[i]
 		}
 		if x != "" {
 			result = append(result, x)
+		}
+		_ = li
+		if line == "" && len(strings.Split(s, "\n"))-1 != li {
+			result = append(result, "")
 		}
 	}
 	for i, line := range result {
