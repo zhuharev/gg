@@ -2,21 +2,24 @@
 package gg
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
+	"log"
 	"math"
+	"net/http"
+	"sync"
+	"time"
 
 	"github.com/golang/freetype/raster"
 	"github.com/nfnt/resize"
-	dry "github.com/ungerik/go-dry"
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/f64"
+	"golang.org/x/image/math/fixed"
 )
 
 type LineCap int
@@ -610,6 +613,44 @@ func (dc *Context) LoadFontFace(path string, points float64) error {
 	return err
 }
 
+var (
+	emoCache = map[rune]image.Image{}
+	cacheMu  sync.Mutex
+)
+
+func (dc *Context) drawEmoji(d *font.Drawer, c rune, dr image.Rectangle, advance fixed.Int26_6, prevC *rune) (err error) {
+	var (
+		emojiImage image.Image
+		cached     bool
+	)
+	// fill cache if need
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if emojiImage, cached = emoCache[c]; !cached {
+		var resp *http.Response
+		start := time.Now()
+		resp, err = http.Get(fmt.Sprintf("https://abs.twimg.com/emoji/v2/72x72/%x.png", c))
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		emojiImage, err = png.Decode(resp.Body)
+		if err != nil {
+			return
+		}
+		log.Println("donw", time.Since(start))
+		// maybe transform it instead resize? I don't know
+		emojiImage = resize.Resize(uint(dc.fontHeight), 0, emojiImage, resize.Lanczos3)
+		emoCache[c] = emojiImage
+	}
+
+	dc.DrawImageAnchored(emojiImage, dr.Min.X, dr.Min.Y, 0, 0)
+	// !Magic number of margin for next draw obtained by experience
+	d.Dot.X += advance + 521
+	*prevC = c
+	return
+}
+
 func (dc *Context) drawString(im *image.RGBA, s string, x, y float64) {
 	d := &font.Drawer{
 		Dst:  im,
@@ -630,27 +671,13 @@ func (dc *Context) drawString(im *image.RGBA, s string, x, y float64) {
 			// TODO: set prevC = '\ufffd'?
 			continue
 		}
-		if c > 10000 {
-			u := fmt.Sprintf("http://twemoji.maxcdn.com/36x36/%x.png", c)
-			data, err := dry.FileGetBytes(u)
-			if err != nil {
-				panic(fmt.Sprint(c, string(c), err))
+		// !Magic I do not know where to start emoji codes
+		// here I try convert to emoji all characters whose codes are greater than 1024
+		if c > 1024 {
+			err := dc.drawEmoji(d, c, dr, advance, &prevC)
+			if err == nil {
+				continue
 			}
-			pngIconImage, err := png.Decode(bytes.NewReader(data))
-			if err != nil {
-				panic(err)
-			}
-
-			pngIconImage = resize.Resize(uint(dc.fontHeight), 0, pngIconImage, resize.Bicubic)
-
-			dc.DrawImageAnchored(pngIconImage, dr.Min.X, dr.Min.Y, 0, 0)
-
-			//			dc.DrawImage(im, x, y)
-
-			//dc.DrawImage(pngIconImage, int(d.Dot.X), int(y))
-			d.Dot.X += advance + 721
-			prevC = c
-			continue
 		}
 		sr := dr.Sub(dr.Min)
 		transformer := draw.BiLinear
@@ -719,8 +746,33 @@ func (dc *Context) MeasureString(s string) (w, h float64) {
 	d := &font.Drawer{
 		Face: dc.fontFace,
 	}
-	a := d.MeasureString(s)
+	a := xMeasureString(d.Face, s)
 	return float64(a >> 6), dc.fontHeight
+}
+
+// form x/image/font/
+// add advance to string with emojis
+func xMeasureString(f font.Face, s string) (advance fixed.Int26_6) {
+	prevC := rune(-1)
+	for _, c := range s {
+		if prevC >= 0 {
+			advance += f.Kern(prevC, c)
+		}
+		a, ok := f.GlyphAdvance(c)
+		if !ok {
+			// TODO: is falling back on the U+FFFD glyph the responsibility of
+			// the Drawer or the Face?
+			// TODO: set prevC = '\ufffd'?
+			continue
+		}
+		if c > 1024 {
+			// !Magic
+			advance += 50
+		}
+		advance += a
+		prevC = c
+	}
+	return advance
 }
 
 // WordWrap wraps the specified string to the given max width and current
